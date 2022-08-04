@@ -20,39 +20,32 @@ library(ggspatial)
 library(patchwork)
 library(rmapshaper)
 library(tictoc)
+library(bcdata)
 rm(list = ls())
-
-if(!dir.exists(paste0(getwd(), "/Output"))){
-  dir.create(paste0(getwd(), "/Output"))
-}
-
-output_folder = paste0(getwd(), "/Output")
-
-# data_folder = "C:/Users/CMADSEN/Documents/WaterbodyGraphFun"
 ```
 
-Read in data.
 ```{r load in data}
 bc = read_sf("W:/CMadsen/SpatialData/bc_simple.shp")
-lakes = read_sf("W:/CMadsen/SpatialData/LakePoly.shp")
-subw = read_sf("W:/CMadsen/SpatialData/WatershedGroups.shp")
+#lakes = read_sf("W:/CMadsen/SpatialData/LakePoly.shp")
+subw = bcdc_query_geodata('freshwater-atlas-watershed-groups') %>% 
+  collect()
 ```
 
-load in streams (huge!)
 ```{r}
-streams = read_sf("C:/Users/CMADSEN/Documents/WaterbodyGraphFun/AllStreams/StreamPoly.shp")
+# streams = bcdc_query_geodata('freshwater-atlas-stream-network') %>% 
+#   filter(INTERSECTS())
 ```
 
 ```{r}
 #Make table to store results for lake network assignments.
-if(file.exists("W:/CMadsen/WaterbodyConnectivity/lakes_network_table.csv")){
-  lake_table = read_csv("W:/CMadsen/WaterbodyConnectivity/lakes_network_table.csv")
-}else{
-lake_table = lakes %>% 
-  st_drop_geometry() %>% 
-  select(WATERBOD_1,WATERSHED_,GNIS_NAME_) %>% mutate(
-      network_id = NA, num_connections = NA)
-}
+# if(file.exists("W:/CMadsen/WaterbodyConnectivity/lakes_network_table.csv")){
+#   lake_table = read_csv("W:/CMadsen/WaterbodyConnectivity/lakes_network_table.csv")
+# }else{
+# lake_table = lakes %>% 
+#   st_drop_geometry() %>% 
+#   select(WATERBOD_1,WATERSHED_,GNIS_NAME_) %>% mutate(
+#       network_id = NA, num_connections = NA)
+# }
 ```
 
 ```{r}
