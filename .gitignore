@@ -3,3 +3,5 @@
 .RData
 .Ruserdata
 .lakes_network_table.csv
+.edge_networks.gpkg
+.WaterbodyConnectivity.Rproj
