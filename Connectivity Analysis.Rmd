@@ -204,26 +204,50 @@ for(i in starting_number:nrow(regions)){
 
 ```
 
+
 ```{r}
-##Visualize a given subwatershed...
-# subw100_lakes = bcdc_query_geodata('freshwater-atlas-lakes') %>% 
-#   filter(WATERSHED_GROUP_ID == 100) %>% 
-#   collect()
-# 
-# subw100_lakes = subw100_lakes %>% 
-#   left_join(lake_networks %>% dplyr::select(WATERBODY_KEY,WATERSHED_GROUP_ID,GNIS_NAME_1,network_number))
-# 
-# sf::write_sf(subw100_lakes, "W:/CMadsen/SpatialData/Subw_100_lakes_networked.gpkg")
-# 
-# ggplot() + 
-#   geom_sf(data = subw[subw$WATERSHED_GROUP_ID == 100,]) + 
-#   geom_sf(data = subw100_lakes, aes(fill = network_number))
+### Edge Networks ###
+
+# Some networks abut the boundaries between subwatersheds. These networks may, in reality, be joined.
+
+#First, just to be generous, buffer the edge networks by 5 more meters (total buffer now 6m)
+all_edge_networks_buffered = st_buffer(all_edge_networks, dist = 5)
+
+#Find which rows overlap which other rows from our all_edge_networks_buffered object.
+overlap_matrix = st_intersects(all_edge_networks_buffered)
+
+overlap_table = overlap_matrix %>% 
+  as.data.frame() %>% 
+  as_tibble() %>% 
+  filter(row.id != col.id)
+
+overlaps_to_add_to_output_table = cbind(all_edge_networks_buffered %>% 
+  st_drop_geometry() %>% 
+  slice(overlap_table$row.id) %>% 
+  summarise(network_number = paste0(subwatershed,"-",network_number)), 
+  all_edge_networks_buffered %>% 
+  st_drop_geometry() %>% 
+  slice(overlap_table$col.id) %>% 
+  summarise(network_number_right = paste0(subwatershed,"-",network_number))
+) %>% 
+  as_tibble()
+  
+overlaps_to_add_to_output_table = overlaps_to_add_to_output_table %>% 
+  group_by(network_number) %>% 
+  summarise(network_number_right = paste0(network_number_right, collapse = ", ")) %>% 
+  separate(network_number_right, sep = ", ", into = c(paste0("network_number_right_",rep(1:8))))
 ```
+
 
 ```{r}
 lake_networks = output_table
 
-#The network IDs are wonky... because network id's were determined using row_number(), there are many missing numbers. #The following table lists the number of unique networks per subwatershed, and gives us a cumsum for each
+#Add a flag for which lakes actually need to have their networks merged.
+lake_networks = lake_networks %>% 
+  left_join(overlaps_to_add_to_output_table)
+
+#The network IDs are wonky... because network id's were determined using row_number(), there are many missing numbers. 
+#The following table lists the number of unique networks per subwatershed, and gives us a cumsum for each
 #watershed that can be used as a network id correction factor.
 
 networks_per_subw = lake_networks %>% 
@@ -234,6 +258,7 @@ networks_per_subw = lake_networks %>%
   mutate(network_correction_factor = cumsum(network_correction_factor))
 
 lake_networks = lake_networks %>% 
+  mutate(network_number_old = network_number) %>% 
   mutate(network_number = as.numeric(str_remove(network_number, "[0-9]*-"))) %>% 
   arrange(network_number) %>%
   mutate(network_number = as.factor(network_number)) %>% 
@@ -243,29 +268,109 @@ lake_networks = lake_networks %>%
   left_join(networks_per_subw) %>% 
   mutate(network_number = network_number + network_correction_factor)
 
+network_number_old_to_new = lake_networks %>% 
+  dplyr::select(network_number,network_number_old,network_number_right_1) %>% 
+  distinct() %>% 
+  filter(!is.na(network_number_right_1)) %>% 
+  dplyr::select(-network_number_right_1)
+
+lake_network_replace_table = lake_networks %>% 
+  dplyr::select(network_number_old,starts_with("network_number_right_")) %>% 
+  distinct() %>% 
+  filter(!is.na(network_number_right_1)) %>% 
+  left_join(network_number_old_to_new) %>% 
+  mutate(network_number_old = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_1 = network_number_old)) %>% 
+  mutate(network_number_right_1 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_2 = network_number_old)) %>% 
+  mutate(network_number_right_2 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_3 = network_number_old)) %>% 
+  mutate(network_number_right_3 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_4 = network_number_old)) %>% 
+  mutate(network_number_right_4 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_5 = network_number_old)) %>% 
+  mutate(network_number_right_5 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_6 = network_number_old)) %>% 
+  mutate(network_number_right_6 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_7 = network_number_old)) %>% 
+  mutate(network_number_right_7 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  left_join(network_number_old_to_new %>% rename(network_number_right_8 = network_number_old)) %>% 
+  mutate(network_number_right_8 = network_number) %>% 
+  dplyr::select(-network_number) %>% 
+  rename(network_number = network_number_old) %>% 
+  pivot_longer(-network_number) %>% 
+  group_by(network_number) %>% 
+  summarise(networks_to_be_grouped = paste0(value, collapse = ", "),
+            lowest_network_in_group = min(c(network_number,value), na.rm=T)) %>% 
+  mutate(networks_to_be_grouped = paste0(network_number, ", ", networks_to_be_grouped))
+
+lake_networks = lake_networks %>% 
+  dplyr::select(-starts_with("network_number_right_")) %>% 
+  left_join(lake_network_replace_table) %>% 
+  #mutate(networks_to_be_grouped = str_extract_all(networks_to_be_grouped, "[0-9]")) %>% 
+  mutate(network_number = case_when(
+    #If there are no other networks in this group to be merged, keep network number as is.
+    is.na(networks_to_be_grouped) ~ network_number,
+    #If the 'networks_to_be_grouped' field isn't NA, use the lowest network ID to replace this row's network_number.
+    T ~ lowest_network_in_group
+  )) %>% 
+  dplyr::select(-regions_completed,
+                -network_number_old,
+                -network_correction_factor,
+                -networks_to_be_grouped,
+                -lowest_network_in_group)
+
+
 #Also, some lakes span more than one subwatershed (e.g. Williston Lake). 309 rows, or 28 lakes total.
 #The networks that these lakes are part of can be joined!
 border_lakes = lake_networks %>% 
-  mutate(lake_id = paste0(WATERBODY_KEY,GNIS_NAME_1)) %>% 
-  filter(duplicated(lake_id)) %>% 
-  dplyr::select(network_number,WATERBODY_KEY,GNIS_NAME_1) %>% 
-  distinct() %>% 
-  group_by(WATERBODY_KEY,GNIS_NAME_1) %>% 
+  mutate(identifier = paste0(WATERBODY_KEY,GNIS_NAME_1)) %>% 
+  filter(identifier %in% all_of(lake_networks %>%
+                                  filter(!is.na(GNIS_NAME_1)) %>% 
+                                  mutate(lake_id = paste0(WATERBODY_KEY,GNIS_NAME_1)) %>%
+                                  filter(duplicated(lake_id)) %>%
+                                  summarise(identifier = paste0(WATERBODY_KEY,GNIS_NAME_1)) %>% 
+                                  distinct() %>% 
+                                  pull(identifier))) %>% 
+  group_by(WATERBODY_KEY,GNIS_NAME_1) %>%
   mutate(lowest_network_id = min(network_number),
-         networks_to_merge = paste0(network_number, collapse = ",")) %>% 
-  ungroup()
+         networks_to_merge = paste0(unique(network_number), collapse = ",")) %>%
+  ungroup() %>% 
+  filter(str_detect(networks_to_merge, ","))
 
-lake_networks = lake_networks %>% 
-  left_join(border_lakes %>% 
-              dplyr::select(network_number,networks_to_merge,lowest_network_id)) %>% 
+lake_networks = lake_networks %>%
+  left_join(border_lakes %>%
+              dplyr::select(network_number,
+                            networks_to_merge,lowest_network_id) %>%
+              distinct()) %>%
+  distinct() %>% 
   mutate(network_number = case_when(
-    str_detect(networks_to_merge,as.character(network_number)) ~ lowest_network_id,
-    T ~ network_number
-  ))
+    #If there's nothing in the 'lowest_network_id' field, retain the number that was in 'network_number'!
+    is.na(lowest_network_id) ~ network_number,
+    T ~ lowest_network_id
+  )) %>% 
+  dplyr::select(-region,-networks_to_merge,-lowest_network_id)
 ```
 
+We now have a table the includes every lake in BC, with an added field that identifies the component network that each lake is a part of. The networks were initially delineated by connecting all lakes, streams and rivers within 4 meters of each other (streams were buffered by 1 m, lakes by 3 m). These networks were buffered an additional 5 meters, then combined with intersecting networks of the same or other subwatersheds (more linkages within a single subwatershed possible in this step). Finally, some lakes straddle the boundaries between subwatersheds - we found all such lakes THAT ARE NAMED (for safety's sake in terms of merging... not to incorrectly merge unnamed lakes) and that share a waterbody_key (quite reliable identifier for lake polygons that are separate but that refer to the same lake in the real world) and assigned whatever the lowest network ID of each set of matching lake polygons was to ALL of the lakes in those networks (i.e. the lake functions as a connector for the networks).
+
+```{r output results}
+write.csv(lake_networks, "C:/Users/CMadsen/Downloads/LocalRWork/output/provincial_waterbody_networks.csv", row.names = F)
+```
+
+
 ```{r}
-# #Let's try making a graph to represent the networks in a given subwatershed.
+# Graph of subwatersheds that are connected.
+
+
 # library(tidygraph)
 # library(ggraph)
 #   
