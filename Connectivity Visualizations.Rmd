@@ -59,7 +59,7 @@ eg_unioned = st_set_geometry(eg_unioned_df, eg_unioned)
 eg_plot_left = ggplot() + 
   geom_sf(data = eg_streams, col = "grey") +
   geom_sf(data = eg_lakes %>% st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(fill = GNIS_NAME_1)) + 
-  geom_sf_label(data = eg_lakes %>% st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(label = GNIS_NAME_1)) +
+  geom_sf_label(data = eg_lakes %>% st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(label = GNIS_NAME_1), nudge_x = -1000) +
   #theme_map() + 
   labs(fill = "Lake Name",
        title = "Lakes before joining...") + 
@@ -80,6 +80,9 @@ eg_plot_right = ggplot() +
   geom_sf_label(data = eg_unioned %>% 
             filter(network == 1) %>% 
             st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(label = paste0("Component ",network))) +
+  geom_segment(aes(x = 1495000, xend = 1492600, y = 672000, yend = 671000),
+               arrow = arrow(length = unit(0.5, "cm"))) +
+  geom_text(aes(x = 1495700, y = 673000), label = "Connecting \nstream") +
   labs(title = "Lakes after joining!") +
   theme_minimal() +
   theme(legend.position = "none",
@@ -92,24 +95,75 @@ ggarrange(eg_plot_left, eg_plot_middle, eg_plot_right, ncol = 3, nrow = 1)
 
 Subwatersheds tended to have thousands of separate networks of waterbodies within their boundaries, and each of these networks could constitute 1 to many thousands of lakes or ponds. Some waterbody networks also spanned multiple subwatersheds!
 
-```{r biggest component, fig.width = 12, fig.height=10}
-# big_comp_eg = bcdc_query_geodata('freshwater-atlas-lakes') %>% 
-#   filter(WATERBODY_KEY %in% all_of(lake_networks %>% filter(network_number == 14547) %>% pull(WATERBODY_KEY))) %>% 
-#   # filter(GNIS_NAME_1 %in% all_of(lake_networks %>% filter(network_number == 14547) %>% pull(GNIS_NAME_1))) %>% 
-#   collect()
-# 
-# big_comp_eg %>% filter(GNIS_NAME_1 %in% all_of(lake_networks %>% filter(network_number == 14547) %>% pull(GNIS_NAME_1)))
-# big_comp_subws = lake_networks %>% 
-#                                    filter(network_number == 14547) %>% 
-#                                    distinct(WATERSHED_GROUP_ID) %>% 
-#                                    pull(WATERSHED_GROUP_ID)
-# 
-# ggplot() + 
-#   geom_sf(data = subw %>% filter(WATERSHED_ %in% big_comp_subws)) +
-#   geom_sf(data = big_comp_eg)
+#### 1. Brooks Peninsula Subwatershed Example
+
+Here we are just looking at the top three largest components in this subwatershed. Note, however, their ID numbers - there are at least 13,397 components within this subwatershed!
+
+```{r example subwatershed, fig.width = 8, fig.height=6}
+eg_sub = subw %>% filter(WATERSHED_ == 17)
+
+eg_lakes = bcdc_query_geodata('freshwater-atlas-lakes') %>% 
+  filter(INTERSECTS(eg_sub)) %>% 
+  collect()
+
+eg_streams = bcdc_query_geodata('freshwater-atlas-stream-network') %>% 
+  filter(INTERSECTS(eg_sub)) %>% 
+  collect() %>% 
+  select(geometry) %>% 
+  st_zm() %>% 
+  st_buffer(dist = 1)
+
+#Join the lake network numbers to the freshwater atlas lake layer. Then retain only the three most numerous networks.
+eg_lakes = eg_lakes %>% 
+  left_join(lake_networks) %>% 
+  select(network_number)
+  
+#Which are those three networks?
+big_three_networks = eg_lakes %>% 
+  st_drop_geometry() %>% 
+  count(network_number, sort = T) %>% 
+  slice(1:3) %>% 
+  pull(network_number)
+
+eg_lakes = eg_lakes %>% 
+  filter(network_number %in% big_three_networks)
+
+#combine the streams with these lakes... may help visual to 'pop'.
+eg_networks = st_cast(st_union(eg_lakes %>% bind_rows(eg_streams)),"POLYGON") %>% 
+  st_as_sf() %>% 
+  mutate(network_id = row_number())
+
+#And finally, identify which of these networks are the three we selected above.
+eg_network_identifier = st_intersects(eg_networks,eg_lakes,sparse = T) %>% 
+  as.data.frame() %>% 
+  as_tibble() %>% 
+  group_by(row.id) %>% 
+  slice(1) %>% 
+  mutate(network = eg_lakes[col.id,]$network_number) %>% 
+  select(-col.id)
+
+eg_networks = eg_networks %>% 
+  left_join(eg_network_identifier %>% 
+              rename(network_id = row.id)) %>% 
+  filter(!is.na(network))
+
+#Convert the network numbers to simply 1, 2 or 3.
+eg_networks = eg_networks %>% 
+  mutate(network = as.character(network))
+
+eg_lakes = eg_lakes %>% mutate(network_number = as.character(network_number))
+
+#Visualize these 3 large networks.
+ggplot() + 
+  geom_sf(data = eg_sub) +
+  geom_sf(data = eg_lakes, aes(fill = network_number, 
+                                         col = network_number)) +
+  geom_sf(data = eg_networks, aes(fill = network, col = network), alpha = 0.5) + 
+  theme_map() + 
+  labs(col = "Component ID", fill = "Component ID")
 ```
 
-#### 1. Constellation of Subwatershed Components
+#### 2. Constellation of Subwatershed Components
 
 A graph that displays subwatersheds (there are 246 of these in B.C.) and their linkages to other subwatersheds. Such linkages occur when a lake, river or stream crosses the boundary between two neighbouring subwatersheds. The largest component of connected subwatersheds includes 10 of them!
 
@@ -254,7 +308,7 @@ circle_graph
 #   labs(edge_color = "Group")
 ```
 
-#### 2. Interactive Map
+#### 3. Interactive Map
 
 This map displays the subwatersheds of B.C., colour-coded by how large the component to which they belong is.
 
