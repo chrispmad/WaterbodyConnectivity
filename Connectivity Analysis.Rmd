@@ -208,10 +208,20 @@ for(i in starting_number:nrow(regions)){
 ```{r}
 ### Edge Networks ###
 
+# If we're skipping the above section, as it's already done, load in the output_table.
+
+output_table = read_csv("C:/Users/CMadsen/Downloads/LocalRWork/WaterbodyConnectivity/lakes_network_table.csv")
+all_edge_networks = read_sf('edge_networks.gpkg')
+
+#At this point, no networks should span multiple subwatersheds...
+output_table %>% 
+  group_by(network_number) %>% 
+  count(WATERSHED_GROUP_ID, sort = T)
+
 # Some networks abut the boundaries between subwatersheds. These networks may, in reality, be joined.
 
-#First, just to be generous, buffer the edge networks by 5 more meters (total buffer now 6m)
-all_edge_networks_buffered = st_buffer(all_edge_networks, dist = 5)
+#First, just to be generous, buffer the edge networks by 2 more meters (total buffer now 3m)
+all_edge_networks_buffered = st_buffer(all_edge_networks, dist = 2)
 
 #Find which rows overlap which other rows from our all_edge_networks_buffered object.
 overlap_matrix = st_intersects(all_edge_networks_buffered)
@@ -220,6 +230,12 @@ overlap_table = overlap_matrix %>%
   as.data.frame() %>% 
   as_tibble() %>% 
   filter(row.id != col.id)
+
+
+### REMOVE AFTER TRIAL ###
+# ggplot() + 
+#   geom_sf(data = output_table %>% filter(network_number == "179-1"), col='red',fill='red') +
+#   geom_sf(data = output_table %>% filter(network_number == "8-1"), col='blue',fill='blue')
 
 overlaps_to_add_to_output_table = cbind(all_edge_networks_buffered %>% 
   st_drop_geometry() %>% 
@@ -230,21 +246,35 @@ overlaps_to_add_to_output_table = cbind(all_edge_networks_buffered %>%
   slice(overlap_table$col.id) %>% 
   summarise(network_number_right = paste0(subwatershed,"-",network_number))
 ) %>% 
-  as_tibble()
+  as_tibble() %>% 
+  #Drop any rows that are of networks in the same subwatershed.
+  filter(str_extract(network_number,"^[0-9]*(?=-)") != str_extract(network_number_right,"^[0-9]*(?=-)"))
   
+### REMOVE AFTER TRIAL ###
+# ggplot() + geom_sf(data = all_edge_networks %>% filter(paste0(subwatershed,"-",network_number) %in% c("41-1","228-128")), aes(col = region, fill = region))
+#The edge network overlaps are being correctly identified. Could the masking to the ~100 m subwatershed boundaries be merging networks that shouldn't be one? Unlikely...
+
 overlaps_to_add_to_output_table = overlaps_to_add_to_output_table %>% 
   group_by(network_number) %>% 
   summarise(network_number_right = paste0(network_number_right, collapse = ", ")) %>% 
-  separate(network_number_right, sep = ", ", into = c(paste0("network_number_right_",rep(1:8))))
+  separate(network_number_right, sep = ", ", into = c(paste0("network_number_right_",rep(1:7))))
+#Note: I've double-checked the output of this tabel - the subwatersheds that it claims to be linked together make sense! Hurray!
 ```
 
 
 ```{r}
+#If continuing from above, use this line:
 lake_networks = output_table
+#Else, read in the data from disk.
+#lake_networks = read_csv('lakes_network_table.csv')
 
 #Add a flag for which lakes actually need to have their networks merged.
 lake_networks = lake_networks %>% 
   left_join(overlaps_to_add_to_output_table)
+
+### REMOVE THE FOLLOWING LINE AFTER TESTING! ### 
+# lake_networks = lake_networks %>% 
+#   filter(WATERSHED_GROUP_ID == 1)
 
 #The network IDs are wonky... because network id's were determined using row_number(), there are many missing numbers. 
 #The following table lists the number of unique networks per subwatershed, and gives us a cumsum for each
@@ -257,16 +287,24 @@ networks_per_subw = lake_networks %>%
   mutate(network_correction_factor = replace_na(network_correction_factor, 0)) %>% 
   mutate(network_correction_factor = cumsum(network_correction_factor))
 
-lake_networks = lake_networks %>% 
+lake_networks = lake_networks %>%
+  ungroup() %>% 
   mutate(network_number_old = network_number) %>% 
   mutate(network_number = as.numeric(str_remove(network_number, "[0-9]*-"))) %>% 
-  arrange(network_number) %>%
-  mutate(network_number = as.factor(network_number)) %>% 
-  mutate(network_number = fct_infreq(network_number)) %>% 
-  mutate(network_number = as.numeric(network_number)) %>%
+  group_by(WATERSHED_GROUP_ID, network_number) %>% 
+  mutate(network_number_new = cur_group_id()) %>% 
+  select(network_number,network_number_new,everything()) %>% 
   #Add in the table showing the number of unique components in each subwatershed.
   left_join(networks_per_subw) %>% 
-  mutate(network_number = network_number + network_correction_factor)
+  mutate(network_number = network_number_new + network_correction_factor) %>% 
+  select(-network_number_new) %>% 
+  ungroup()
+#The above code seems to work without a hitch.
+
+#Which network numbers need to be unified?
+which(!is.na(lake_networks$network_number_right_1)) %>% 
+  as_tibble()
+#244,590 lakes need to have their networks adjusted!
 
 network_number_old_to_new = lake_networks %>% 
   dplyr::select(network_number,network_number_old,network_number_right_1) %>% 
@@ -274,6 +312,9 @@ network_number_old_to_new = lake_networks %>%
   filter(!is.na(network_number_right_1)) %>% 
   dplyr::select(-network_number_right_1)
 
+# We need to look across the 1 to 8 columns that contain the (old) network IDs of overlapping edge networks.
+# With this, we can replace the old IDs of those networks with the new network IDs.
+# This table output lists, for overlapping edge networks, the network number, the list of networks in the overlapping segment (NOTE: can be multiple overlaps that include a given network!), and what the lowest network in that overlapping segment is.
 lake_network_replace_table = lake_networks %>% 
   dplyr::select(network_number_old,starts_with("network_number_right_")) %>% 
   distinct() %>% 
@@ -302,11 +343,10 @@ lake_network_replace_table = lake_networks %>%
   left_join(network_number_old_to_new %>% rename(network_number_right_7 = network_number_old)) %>% 
   mutate(network_number_right_7 = network_number) %>% 
   dplyr::select(-network_number) %>% 
-  left_join(network_number_old_to_new %>% rename(network_number_right_8 = network_number_old)) %>% 
-  mutate(network_number_right_8 = network_number) %>% 
-  dplyr::select(-network_number) %>% 
+  #Now each column has had its network's ID updated to the cross-subwatershed numbering system.
   rename(network_number = network_number_old) %>% 
   pivot_longer(-network_number) %>% 
+  filter(!is.na(value)) %>% 
   group_by(network_number) %>% 
   summarise(networks_to_be_grouped = paste0(value, collapse = ", "),
             lowest_network_in_group = min(c(network_number,value), na.rm=T)) %>% 
@@ -327,7 +367,6 @@ lake_networks = lake_networks %>%
                 -network_correction_factor,
                 -networks_to_be_grouped,
                 -lowest_network_in_group)
-
 
 #Also, some lakes span more than one subwatershed (e.g. Williston Lake). 309 rows, or 28 lakes total.
 #The networks that these lakes are part of can be joined!
@@ -360,103 +399,8 @@ lake_networks = lake_networks %>%
   dplyr::select(-region,-networks_to_merge,-lowest_network_id)
 ```
 
-We now have a table the includes every lake in BC, with an added field that identifies the component network that each lake is a part of. The networks were initially delineated by connecting all lakes, streams and rivers within 4 meters of each other (streams were buffered by 1 m, lakes by 3 m). These networks were buffered an additional 5 meters, then combined with intersecting networks of the same or other subwatersheds (more linkages within a single subwatershed possible in this step). Finally, some lakes straddle the boundaries between subwatersheds - we found all such lakes THAT ARE NAMED (for safety's sake in terms of merging... not to incorrectly merge unnamed lakes) and that share a waterbody_key (quite reliable identifier for lake polygons that are separate but that refer to the same lake in the real world) and assigned whatever the lowest network ID of each set of matching lake polygons was to ALL of the lakes in those networks (i.e. the lake functions as a connector for the networks).
+We now have a table the includes every lake in BC, with an added field that identifies the component network that each lake is a part of. The networks were initially delineated by connecting all lakes, streams and rivers within 4 meters of each other (streams were buffered by 1 m, lakes by 3 m). These networks were buffered an additional 2 meters, then combined with intersecting networks of the same or other subwatersheds (more linkages within a single subwatershed possible in this step). Finally, some lakes straddle the boundaries between subwatersheds - we found all such lakes THAT ARE NAMED (for safety's sake in terms of merging... not to incorrectly merge unnamed lakes) and that share a waterbody_key (quite reliable identifier for lake polygons that are separate but that refer to the same lake in the real world) and assigned whatever the lowest network ID of each set of matching lake polygons was to ALL of the lakes in those networks (i.e. the lake functions as a connector for the networks).
 
 ```{r output results}
 write.csv(lake_networks, "C:/Users/CMadsen/Downloads/LocalRWork/output/provincial_waterbody_networks.csv", row.names = F)
 ```
-
-
-```{r}
-# Graph of subwatersheds that are connected.
-
-
-# library(tidygraph)
-# library(ggraph)
-#   
-# graph_df = lake_networks %>% 
-#   filter(WATERSHED_GROUP_ID == 102, region == 12) %>% 
-#   rename(wb_name = GNIS_NAME_1) %>% 
-#   group_by(WATERBODY_KEY) %>% 
-#   mutate(WATERBODY_KEY = cur_group_id()) %>% 
-#   ungroup() %>% 
-#   mutate(wb_name = ifelse(is.na(wb_name), as.character(WATERBODY_KEY), wb_name)) %>% 
-#   dplyr::select(wb_name,network_number,num_connections) %>% 
-#   distinct() %>% 
-#   add_count(network_number) %>% 
-#   #filter(n > 2) %>% 
-#   select(-n) %>% 
-#   arrange(desc(num_connections))
-#   
-# #We could use the connectivity I measured in the loop above to guide the number of (arbitrary) linkages drawn.
-# edges = graph_df %>% 
-#   # uncount(num_connections) %>% 
-#   # left_join(graph_df) %>% 
-#   rename(from = wb_name) %>% 
-#   group_by(from) %>% 
-#   mutate(to = case_when(
-#     num_connections > 1 ~ list(sample(graph_df[graph_df$wb_name != from,]$wb_name,num_connections,replace=F)),
-#     T ~ list(from))) %>% 
-#   ungroup() %>% 
-#   select(from, to) %>% 
-#   unnest_longer(to)
-# 
-# my_tbl_graph = tbl_graph(edges = edges, nodes = graph_df,
-#           directed = F)
-# 
-# my_tbl_graph %>% 
-#   ggraph(layout = 'kk') + 
-#   #geom_edge_link(aes(alpha = ..index..), show.legend = FALSE) + 
-#   geom_node_point(aes(colour = as.factor(network_number), size = log10(num_connections))) + 
-#   theme_graph() + 
-#   scale_color_brewer(palette = "Dark2", guide = "none") + 
-#   scale_size_continuous(guide = "none") +
-#   labs(col = "Group")
-```
-
-```{r}
-#Just a basic ggplot to show how large some of the larger networks are.
-
-```
-
-
-```{r}
-#To stitch together any networks that SHOULD be a single network but were
-#split apart by subwatershed boundaries, we can first find all networks that come close to subwatershed boundaries.
-
-#First, which lakes are within, say, 1 kilometer of any subwatershed borders?
-# subw_neg = st_buffer(subw, -100)
-# subw_edge = st_difference(subw, region_negative)
-
-# for(i in 1:nrow(subw)){
-#   region = subw[i,]
-
-  #If the region is made up of a large number of separate polygons, remove any that are less than
-  #1,000,000 square meters.
-  if(st_geometry_type(region) == "MULTIPOLYGON"){
-    region = region %>%
-      st_cast("POLYGON") %>%
-      mutate(area = as.numeric(st_area(.))) %>%
-      filter(area > 1000000) %>%
-      st_cast("MULTIPOLYGON")
-  }
-
-  #Do a negative buffer of 100 meters around the subwatershed i.
-  region_negative = st_buffer(region, -100)
-  region_edge = st_difference(region, region_negative)
-
-  #Get lakes that are inside this subwatershed.
-  border_lakes = bcdc_query_geodata('freshwater-atlas-lakes') %>%
-    filter(WATERSHED_GROUP_ID == region$WATERSHED_GROUP_ID) %>%
-    collect() %>%
-    st_join(region_edge %>% dplyr::select(WATERSHED_GROUP_NAME), st_intersects) %>%
-    filter(!is.na(WATERSHED_GROUP_NAME))
-
-  ggplot() + geom_sf(data = border_lakes)
-}
-
-```
-
-
-
-

@@ -1,0 +1,312 @@
+---
+title: "Visualizations of Waterbody Components in BC. "
+author: "Chris Madsen"
+date: "09/08/2022"
+output:
+  prettydoc::html_pretty:
+    theme: material
+    highlight: github
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(warning = F)
+library(tidyverse)
+library(tidygraph)
+library(bcdata)
+library(ggpubr)
+library(ggthemes)
+library(ggraph)
+library(plotly)
+library(leaflet)
+library(sf)
+
+rm(list = ls())
+
+lake_networks = read_csv("C:/Users/CMadsen/Downloads/LocalRWork/output/provincial_waterbody_networks.csv")
+subw = read_sf("W:/CMadsen/SpatialData/WatershedGroups_lowres.shp")
+```
+
+## Introduction
+
+I assessed the spatial connectivity of waterbodies (lakes, rivers and streams) across the province of British Columbia. To do this, I looked at each subwatershed in turn, downloading the streams and lakes for said subwatershed. By identifying which lakes and streams are in physical contact, I was able to group all the lakes and streams in each subwatershed into networks, or "components."
+
+```{r example, fig.width= 10}
+eg_lakes = bcdc_query_geodata('freshwater-atlas-lakes') %>% 
+  filter(GNIS_NAME_1 %in% c("Mara Lake","Shuswap Lake")) %>% 
+  collect()
+
+eg_streams = bcdc_query_geodata('freshwater-atlas-stream-network') %>% 
+  filter(INTERSECTS(st_bbox(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake")))) %>% 
+  collect()
+
+eg_unioned = st_cast(st_union(eg_lakes %>% 
+                   select(GNIS_NAME_1) %>% 
+                   bind_rows(
+                     st_buffer(
+                       eg_streams,
+                       1) %>% 
+                       select(GNIS_NAME) %>% 
+                       rename(GNIS_NAME_1 = GNIS_NAME)
+                     )
+                 ), "POLYGON")
+eg_unioned_df = data.frame(network = c(1,2))
+  
+eg_unioned = st_set_geometry(eg_unioned_df, eg_unioned)
+
+eg_plot_left = ggplot() + 
+  geom_sf(data = eg_streams, col = "grey") +
+  geom_sf(data = eg_lakes %>% st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(fill = GNIS_NAME_1)) + 
+  geom_sf_label(data = eg_lakes %>% st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(label = GNIS_NAME_1)) +
+  #theme_map() + 
+  labs(fill = "Lake Name",
+       title = "Lakes before joining...") + 
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_blank())
+
+eg_plot_middle = ggplot() + 
+  geom_segment(aes(x = 0, y = 0, xend = 1, yend = 0),
+                  arrow = arrow(length = unit(0.5, "cm")),
+               size = 2, col = "purple") + 
+  theme_map()
+
+eg_plot_right = ggplot() + 
+  geom_sf(data = eg_unioned %>% 
+            filter(network == 1) %>% 
+            st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(fill = as.factor(network))) + 
+  geom_sf_label(data = eg_unioned %>% 
+            filter(network == 1) %>% 
+            st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(label = paste0("Component ",network))) +
+  labs(title = "Lakes after joining!") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_blank())
+
+ggarrange(eg_plot_left, eg_plot_middle, eg_plot_right, ncol = 3, nrow = 1)
+```
+
+## Results
+
+Subwatersheds tended to have thousands of separate networks of waterbodies within their boundaries, and each of these networks could constitute 1 to many thousands of lakes or ponds. Some waterbody networks also spanned multiple subwatersheds!
+
+```{r biggest component, fig.width = 12, fig.height=10}
+# big_comp_eg = bcdc_query_geodata('freshwater-atlas-lakes') %>% 
+#   filter(WATERBODY_KEY %in% all_of(lake_networks %>% filter(network_number == 14547) %>% pull(WATERBODY_KEY))) %>% 
+#   # filter(GNIS_NAME_1 %in% all_of(lake_networks %>% filter(network_number == 14547) %>% pull(GNIS_NAME_1))) %>% 
+#   collect()
+# 
+# big_comp_eg %>% filter(GNIS_NAME_1 %in% all_of(lake_networks %>% filter(network_number == 14547) %>% pull(GNIS_NAME_1)))
+# big_comp_subws = lake_networks %>% 
+#                                    filter(network_number == 14547) %>% 
+#                                    distinct(WATERSHED_GROUP_ID) %>% 
+#                                    pull(WATERSHED_GROUP_ID)
+# 
+# ggplot() + 
+#   geom_sf(data = subw %>% filter(WATERSHED_ %in% big_comp_subws)) +
+#   geom_sf(data = big_comp_eg)
+```
+
+#### 1. Constellation of Subwatershed Components
+
+A graph that displays subwatersheds (there are 246 of these in B.C.) and their linkages to other subwatersheds. Such linkages occur when a lake, river or stream crosses the boundary between two neighbouring subwatersheds. The largest component of connected subwatersheds includes 10 of them!
+
+Of particular note is the component centered around subwatershed 167. Also, can you spot the hexagram??
+
+```{r making_network_data}
+# Graph of subwatersheds that are connected.
+
+# Find which subwatersheds are linked together.
+graph_df = lake_networks %>% 
+  group_by(network_number) %>% 
+  count(WATERSHED_GROUP_ID, name = 'total_lakes') %>% 
+  ungroup() %>% 
+  mutate(WATERSHED_GROUP_ID = str_pad(WATERSHED_GROUP_ID, width = 3, pad = "0"))
+
+#Cycling through the subwatershed ID numbers, we find any networks that include 
+# the subwatershed in question to generate a 2-column matrix that links the linkages of subwatersheds.
+for(i in 1:246){
+  subw_number = str_pad(i, width = 3, pad = "0")
+  
+  crossing_per_subw = graph_df %>% 
+    filter(network_number %in% all_of(graph_df %>% 
+                                        filter(WATERSHED_GROUP_ID == subw_number) %>%
+                                        pull(network_number))) %>% 
+    distinct(WATERSHED_GROUP_ID) %>% 
+    expand(from = WATERSHED_GROUP_ID,
+         to = WATERSHED_GROUP_ID) %>% 
+    filter(from != to) %>% 
+    select(from, to) %>% 
+    distinct()
+    
+  if(i == 1){
+    subw_connections = crossing_per_subw
+  }else{
+    subw_connections = bind_rows(subw_connections,crossing_per_subw)
+  }
+}
+# precross_df = graph_df %>% 
+#   #Add leading zeros to the subwatershed group id.
+#   mutate(WATERSHED_GROUP_ID = str_pad(WATERSHED_GROUP_ID,3,pad = "0")) %>% 
+#   #Flag any networks that are present in the subwatershed of interest.
+#   group_by(network_number) %>% 
+#   mutate(subw_by_network = paste0(WATERSHED_GROUP_ID, collapse = ", ")) %>%
+#   #Only retain networks that join 2+ subwatersheds
+#   filter(str_detect(subw_by_network, ", ")) 
+#   
+# #Cycling through the subwatershed ID numbers, we find any networks that include 
+# # the subwatershed in question to generate a 2-column matrix that links the linkages of subwatersheds.
+# for(i in 1:246){
+#   subw_number = str_pad(i, width = 3, pad = "0")
+#   
+#   crossing_per_subw = precross_df %>% 
+#     mutate(this_subw = str_detect(subw_by_network, subw_number)) %>% 
+#     filter(this_subw == T) %>% 
+#     ungroup() %>% 
+#     filter(!duplicated(WATERSHED_GROUP_ID)) %>% 
+#     expand(from = WATERSHED_GROUP_ID,
+#          to = WATERSHED_GROUP_ID) %>% 
+#     filter(from != to) %>% 
+#     select(from, to) %>% 
+#     distinct()
+# 
+#   if(i == 1){
+#     subw_connections = crossing_per_subw
+#   }else{
+#     subw_connections = bind_rows(subw_connections,crossing_per_subw)
+#   }
+# }
+
+edge_network = subw_connections %>% 
+  mutate(across(everything(), str_remove_all, "0*(?=[1-9]+)")) %>% 
+  mutate(across(everything(), as.integer))
+
+unconnected_networks = edge_network %>% 
+  select(from) %>% 
+  distinct(from) %>% 
+  arrange(from) %>% 
+  mutate(already_in = T) %>% 
+  complete(from = 1:246, fill = list(already_in = F)) %>% 
+  filter(already_in == F)
+  
+edge_network = edge_network %>% 
+  bind_rows(unconnected_networks %>% 
+              select(from) %>% 
+              mutate(to = from))
+
+subw_graph_df = as_tbl_graph(edge_network)
+```
+
+```{r circle_graph, fig.width=10, fig.height=10} 
+#Different ggraph options include: kk, auto, circlepack,
+circle_graph_data = subw_graph_df %>%
+  mutate(group = as.numeric(tidygraph::group_components())) %>% 
+  group_by(group) %>% 
+  mutate(members_in_group = n()) %>% 
+  ungroup() %>% 
+  mutate(group = case_when(
+    members_in_group == 1 ~ max(group)+1, 
+    T ~ group)) %>% 
+  mutate(group = as.character(as.numeric(as.factor(group)))) %>% 
+  mutate(group = factor(group, levels = 1:max(as.numeric(group)))) %>% 
+  ungroup() %>%  
+  activate(edges) %>% 
+  mutate(group_from = .N()$group[from],
+         group_to = .N()$group[to]) %>% 
+  mutate(ge = ifelse(group_from == group_to, group_from, NA))
+
+circle_graph = circle_graph_data %>% 
+  ggraph(layout = 'kk') +
+  geom_edge_link(aes(color = as.factor(ge))) +
+  geom_node_label(aes(label = name)) +
+  theme_graph() +
+  #scale_color_brewer(palette = "Dark2", guide = "none") +
+  labs(edge_color = "Subwatershed components") + 
+  theme(legend.position = "none")
+
+circle_graph
+```
+
+```{r circle_graph_no_singles, fig.width=12, fig.height=10} 
+# If we exclude subwatersheds that are not connected to other subwatersheds by their waterbody networks, we get the following graph.
+
+#Different ggraph options include: kk, auto, circlepack,
+# subw_graph_df %>%
+#   mutate(group = as.numeric(tidygraph::group_components())) %>% 
+#   group_by(group) %>% 
+#   mutate(members_in_group = n()) %>% 
+#   ungroup() %>% 
+#   filter(group > 1) %>% 
+#   mutate(group = as.character(as.numeric(as.factor(group)))) %>% 
+#   mutate(group = factor(group, levels = 1:max(as.numeric(group)))) %>% 
+#   ungroup() %>%  
+#   activate(edges) %>% 
+#   mutate(group_from = .N()$group[from],
+#          group_to = .N()$group[to]) %>% 
+#   mutate(ge = ifelse(group_from == group_to, group_from, NA)) %>% 
+#   ggraph(layout = 'kk') +
+#   geom_edge_link(aes(color = as.factor(ge))) +
+#   geom_node_label(aes(label = name)) +
+#   theme_graph() +
+#   #scale_color_brewer(palette = "Dark2", guide = "none") +
+#   labs(edge_color = "Group")
+```
+
+#### 2. Interactive Map
+
+This map displays the subwatersheds of B.C., colour-coded by how large the component to which they belong is.
+
+```{r leaflet map, fig.width=10, fig.height=10}
+
+# nodes_df = circle_graph_data %>% 
+#               activate(nodes) %>% 
+#               as.data.frame() %>% 
+#               as_tibble() %>% 
+#               mutate(name = as.integer(name)) %>% 
+#               rename(subw = name)
+
+subw_cliques = data.frame(from = 1:246) %>% 
+  mutate(from = str_pad(from, width = 3, pad = "0")) %>% 
+  left_join(subw_connections %>% 
+  group_by(from) %>% 
+  distinct(to) %>% 
+  add_count() %>% 
+  ungroup()) %>%
+  as_tibble() %>% 
+  mutate(n = replace_na(n, 0)) %>% 
+  mutate(n = n+1) %>% 
+  summarise(subw = as.numeric(str_remove_all(from,"^0*(?=[1-9]?)")),
+            members_in_group = n)
+  
+
+subw_w_dat = subw %>% 
+  st_transform(crs = 4326) %>% 
+  rename(subw = WATERSHED_) %>% 
+  left_join(subw_cliques) %>% 
+  select(subw, WATERSHE_1, members_in_group) %>% 
+  rename(subwatershed_name = WATERSHE_1)
+
+my.pal = leaflet::colorBin(palette = "Blues", 
+                                   domain = subw_w_dat$members_in_group,
+                                   bins = 5)
+
+leaflet() %>% 
+  addProviderTiles(providers$Stamen.TonerBackground) %>% 
+  addLegend(pal = my.pal, 
+            values = subw_w_dat$members_in_group,title = "No. Subwatersheds \nin Component") %>% 
+  addPolygons(data = subw_w_dat,
+              color = my.pal(subw_w_dat$members_in_group),
+              label = ~paste0(subwatershed_name,":",members_in_group," subwatersheds in component"),
+              weight = 1)
+```
+
+
+## Methods
+
+I used R and RStudio to perform these analyses. The code I wrote is freely available for anyone to download, read, and use at their leisure :) Please find it here on github: https://github.com/chrispmad/WaterbodyConnectivity
+
+This script must be run after running the 'Connectivity Analysis' R Markdown file. Please note that the 'Connectivity Analysis' file is not intended to be knit, but rather have each chunk run sequentially, allowing the user to verify that all is well before proceeding.
+
+The core analysis loop takes 3 ~ 10 minutes per subwatershed, and seems to take my laptop 10 - 12 hours to run to completion! So make sure you brew yourself a nice cup of tea before beginning to run that analysis... It produces a table of columns to help uniquely identify lake polygons from the 'Freshwater Atlas' layer (freely available either online or through the bcdata R package) and a geopackage of so-called 'edge networks'; the latter must be used to link subwatersheds that share networks across their 'borders'.
