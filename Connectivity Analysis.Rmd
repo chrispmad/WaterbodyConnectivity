@@ -14,7 +14,7 @@ editor_options:
 ```{r setup, include=FALSE}
 
 # ---------------------------------------------------------- #
-# This script analyses all of the streams, rivers and lakes in British Columbia to identify networks, or "components" , of spatially linked lakes. The motivation for this analysis is principally to inform risk analyses for aquatic invasive species; for example, if a goldfish were released in lake A, what are all of the lakes to which this invasive fish species could potentially travel? Note that this analyses does not currently account for elevational differences between lakes or flow rates.
+# This script analyses all of the streams, rivers and lakes in British Columbia to identify networks, or "components" , of spatially linked lakes. The motivation for this analysis is principally to inform risk analyses for aquatic invasive species; for example, if a goldfish were released in lake A, what are all of the lakes to which this invasive fish species could potentially travel? Note that this analyses does not currently account for elevation differences between lakes or flow rates.
 # ---------------------------------------------------------- #
 
 #Set options, load in libraries to use, and clean the working space.
