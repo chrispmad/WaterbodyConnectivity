@@ -7,4 +7,5 @@
 .edge_networks.gpkg
 .WaterbodyConnectivity.Rproj
 .Connectivity-Visualizations.html
+.Connectivity-Visualizations_streams.html
 .provincial_waterbody_networks.csv
