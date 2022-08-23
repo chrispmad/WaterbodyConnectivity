@@ -25,7 +25,7 @@ library(sf)
 
 rm(list = ls())
 
-lake_networks = read_csv("C:/Users/CMadsen/Downloads/LocalRWork/output/provincial_waterbody_networks.csv")
+lake_networks = read_csv("provincial_waterbody_networks.csv")
 subw = read_sf("W:/CMadsen/SpatialData/WatershedGroups_lowres.shp")
 ```
 
@@ -38,29 +38,29 @@ eg_lakes = bcdc_query_geodata('freshwater-atlas-lakes') %>%
   filter(GNIS_NAME_1 %in% c("Mara Lake","Shuswap Lake")) %>% 
   collect()
 
-eg_streams = bcdc_query_geodata('freshwater-atlas-stream-network') %>% 
-  filter(INTERSECTS(st_bbox(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake")))) %>% 
-  collect()
+eg_rivers = bcdc_query_geodata('freshwater-atlas-rivers') %>% 
+  filter(GNIS_NAME_1 == 'Shuswap River') %>%
+  filter(INTERSECTS(eg_lakes[eg_lakes$GNIS_NAME_1 == "Mara Lake",])) %>% 
+  collect() %>% 
+  st_crop(eg_lakes)
 
 eg_unioned = st_cast(st_union(eg_lakes %>% 
                    select(GNIS_NAME_1) %>% 
                    bind_rows(
-                     st_buffer(
-                       eg_streams,
-                       1) %>% 
-                       select(GNIS_NAME) %>% 
-                       rename(GNIS_NAME_1 = GNIS_NAME)
+                       eg_rivers %>% 
+                       select(GNIS_NAME_1)
                      )
                  ), "POLYGON")
-eg_unioned_df = data.frame(network = c(1,2))
+
+eg_unioned_df = data.frame(network = c(1))
   
 eg_unioned = st_set_geometry(eg_unioned_df, eg_unioned)
 
 eg_plot_left = ggplot() + 
-  geom_sf(data = eg_streams, col = "grey") +
+  geom_sf(data = eg_rivers, fill = "lightblue") +
   geom_sf(data = eg_lakes %>% st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(fill = GNIS_NAME_1)) + 
   geom_sf_label(data = eg_lakes %>% st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(label = GNIS_NAME_1), nudge_x = -1000) +
-  #theme_map() + 
+  theme_map() + 
   labs(fill = "Lake Name",
        title = "Lakes before joining...") + 
   theme_minimal() +
@@ -80,9 +80,9 @@ eg_plot_right = ggplot() +
   geom_sf_label(data = eg_unioned %>% 
             filter(network == 1) %>% 
             st_crop(st_buffer(eg_lakes %>% filter(GNIS_NAME_1 == "Mara Lake"), 10000)), aes(label = paste0("Component ",network))) +
-  geom_segment(aes(x = 1495000, xend = 1492600, y = 672000, yend = 671000),
+  geom_segment(aes(x = 1492000, xend = 1492600, y = 675000, yend = 671000),
                arrow = arrow(length = unit(0.5, "cm"))) +
-  geom_text(aes(x = 1495700, y = 673000), label = "Connecting \nstream") +
+  geom_label(aes(x = 1491700, y = 676000), label = "Connecting \nriver") +
   labs(title = "Lakes after joining!") +
   theme_minimal() +
   theme(legend.position = "none",
@@ -106,30 +106,29 @@ eg_lakes = bcdc_query_geodata('freshwater-atlas-lakes') %>%
   filter(INTERSECTS(eg_sub)) %>% 
   collect()
 
-eg_streams = bcdc_query_geodata('freshwater-atlas-stream-network') %>% 
+eg_rivers = bcdc_query_geodata('freshwater-atlas-rivers') %>% 
   filter(INTERSECTS(eg_sub)) %>% 
   collect() %>% 
-  select(geometry) %>% 
-  st_zm() %>% 
-  st_buffer(dist = 1)
+  select(geometry)
 
 #Join the lake network numbers to the freshwater atlas lake layer. Then retain only the three most numerous networks.
 eg_lakes = eg_lakes %>% 
   left_join(lake_networks) %>% 
   select(network_number)
   
+
 #Which are those three networks?
 big_three_networks = eg_lakes %>% 
   st_drop_geometry() %>% 
   count(network_number, sort = T) %>% 
-  slice(1:3) %>% 
+  slice(1) %>% 
   pull(network_number)
 
 eg_lakes = eg_lakes %>% 
   filter(network_number %in% big_three_networks)
 
-#combine the streams with these lakes... may help visual to 'pop'.
-eg_networks = st_cast(st_union(eg_lakes %>% bind_rows(eg_streams)),"POLYGON") %>% 
+#combine the rivers with these lakes... may help visual to 'pop'.
+eg_networks = st_cast(st_union(eg_lakes %>% bind_rows(st_buffer(eg_rivers,1))),"POLYGON") %>% 
   st_as_sf() %>% 
   mutate(network_id = row_number())
 
@@ -308,4 +307,4 @@ I used R and RStudio to perform these analyses. The code I wrote is freely avail
 
 This script must be run after running the 'Connectivity Analysis' R Markdown file. Please note that the 'Connectivity Analysis' file is not intended to be knit, but rather have each chunk run sequentially, allowing the user to verify that all is well before proceeding.
 
-The core analysis loop takes 3 ~ 10 minutes per subwatershed, and seems to take my laptop 10 - 12 hours to run to completion! So make sure you brew yourself a nice cup of tea before beginning to run that analysis... It produces a table of columns to help uniquely identify lake polygons from the 'Freshwater Atlas' layer (freely available either online or through the bcdata R package) and a geopackage of so-called 'edge networks'; the latter must be used to link subwatersheds that share networks across their 'borders'.
+The core analysis loop takes 1 - 5 minutes per subwatershed, and seems to take my laptop around 3 hours to run to completion! So make sure you brew yourself a nice cup of tea before beginning to run that analysis... It produces a table of columns to help uniquely identify lake polygons from the 'Freshwater Atlas' layer (freely available either online or through the bcdata R package) and a geopackage of so-called 'edge networks'; the latter must be used to link subwatersheds that share networks across their 'borders'.
