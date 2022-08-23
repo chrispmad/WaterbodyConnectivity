@@ -98,10 +98,32 @@ for(i in starting_number:nrow(regions)){
   lakes = bcdc_query_geodata('freshwater-atlas-lakes') %>% filter(INTERSECTS(region)) %>% collect()
   
   print(paste0("Region ",i," - Finished data download for this region"))
+  
+  #If there are no rivers whatsoever in the subwatershed, assign numbers to the lakes.
+  if(nrow(rivers) == 0){
+    lakes = lakes %>% 
+      mutate(network_number = paste0(unique(region$subwatershed),"-",row_number()),
+             region = i,
+             num_connections = 0) %>% 
+      dplyr::select(network_number,region,WATERBODY_KEY,WATERSHED_GROUP_ID,GNIS_NAME_1,num_connections) %>% 
+      st_drop_geometry()
     
+    output_table = bind_rows(output_table, lakes %>% 
+                             ungroup()) %>% 
+    mutate(regions_completed = i)
+  
+    #Write output table to disk.
+    write.csv(output_table, 
+              paste0("lakes_network_table.csv"),
+              row.names = F)
+    print(paste0("Region ",i," - no rivers, so all lakes assigned their own network IDs."))
+    next
+  }
+  
   #Trim away and rivers and lakes that aren't actually inside the i'th subwatershed.
   rivers = st_join(rivers, region, st_intersects) %>% filter(!is.na(subwatershed))
   lakes = st_join(lakes, region, st_intersects) %>% filter(!is.na(subwatershed))
+  
   
   print(paste0("Region ",i," - Cropped rivers and lakes to region outline"))
   
@@ -121,7 +143,8 @@ for(i in starting_number:nrow(regions)){
   #Strip away all columns except the geometry column for the rivers; remove Z coordinates from any rivers that have them (these indicate height).
   rivers = rivers %>% 
     select(geometry) %>% 
-    st_zm()
+    st_zm() %>% 
+    st_buffer(dist = 7)
     
   #Find the number of rivers that connect to lakes.
   number_connections_table = as.data.frame(st_intersects(lakes, rivers)) %>% 
@@ -383,7 +406,7 @@ lake_networks = lake_networks %>%
   dplyr::select(-region,-networks_to_merge,-lowest_network_id)
 ```
 
-We now have a table the includes every lake in BC, with an added field that identifies the component network that each lake is a part of. The networks were initially delineated by connecting all lakes and rivers within 4 meters of each other (lakes by 3 m). These networks were combined with intersecting networks of other subwatersheds. Finally, some lakes straddle the boundaries between subwatersheds - we found all such lakes THAT ARE NAMED (for safety's sake in terms of merging... we want to avoid incorrectly merging unnamed lakes that are harded to differentiate between because of their lack of a name) and that share a waterbody_key (quite reliable identifier for lake polygons that are separate but that refer to the same lake in the real world) and assigned whatever the lowest network ID of each set of matching lake polygons was to ALL of the lakes in those networks (i.e. the lake functions as a connector for the networks).
+We now have a table the includes every lake in BC, with an added field that identifies the component network that each lake is a part of. The networks were initially delineated by connecting all lakes and rivers within 10 meters of each other (buffered lakes by 3 and rivers by 7 meters). These networks were combined with intersecting networks of other subwatersheds. Finally, some lakes straddle the boundaries between subwatersheds - we found all such lakes THAT ARE NAMED (for safety's sake in terms of merging... we want to avoid incorrectly merging unnamed lakes that are harded to differentiate between because of their lack of a name) and that share a waterbody_key (quite reliable identifier for lake polygons that are separate but that refer to the same lake in the real world) and assigned whatever the lowest network ID of each set of matching lake polygons was to ALL of the lakes in those networks (i.e. the lake functions as a connector for the networks).
 
 ```{r output results}
 write.csv(lake_networks, "provincial_waterbody_networks.csv", row.names = F)
