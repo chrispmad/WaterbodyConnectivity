@@ -2,7 +2,6 @@
 .Rhistory
 .RData
 .Ruserdata
-.lakes_network_table.csv
 .lakes_network_table_backup.csv
 .edge_networks.gpkg
 .WaterbodyConnectivity.Rproj
