@@ -95,9 +95,9 @@ ggarrange(eg_plot_left, eg_plot_middle, eg_plot_right, ncol = 3, nrow = 1)
 
 Subwatersheds tended to have thousands of separate networks of waterbodies within their boundaries, and each of these networks could constitute 1 to many thousands of lakes or ponds. Some waterbody networks also spanned multiple subwatersheds!
 
-#### 1. Brooks Peninsula Subwatershed Example
+#### 1. Alberni Inlet subwatershed (Vancouver Island)
 
-Here we are just looking at the top three largest components in this subwatershed. Note, however, their ID numbers - there are at least 13,397 components within this subwatershed!
+Shown here is the largest network (i.e. highest number of lakes constituting the network) in the whole subwatershed.
 
 ```{r example subwatershed, fig.width = 8, fig.height=6}
 eg_sub = subw %>% filter(WATERSHED_ == 17)
@@ -166,7 +166,7 @@ ggplot() +
 
 A graph that displays subwatersheds (there are 246 of these in B.C.) and their linkages to other subwatersheds. Such linkages occur when a lake, river or stream crosses the boundary between two neighbouring subwatersheds. The largest component of connected subwatersheds includes 10 of them!
 
-Of particular note is the component centered around subwatershed 167. Also, can you spot the hexagram??
+Of particular note is the component in the center of this graph.
 
 ```{r making_network_data}
 # Graph of subwatersheds that are connected.
